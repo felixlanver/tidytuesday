@@ -1,0 +1,266 @@
+---
+title: "week_02"
+author: "Felix Lanver"
+date: "2023-01-15"
+output: html_document
+---
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#packages
+pacman::p_load(tidyverse, ggfx, patchwork, showtext, mapproj, broom, rnaturalearth, tigris)
+
+
+# Get the Data
+feederwatch <- tidytuesdayR::tt_load(2023, week = 2)
+# get public & countsite data
+public <- feederwatch$PFW_2021_public
+countsite <- feederwatch$PFW_count_countsite_public_2021
+
+# remove Canada, Alaska & Hawaii the simplify map
+public_us <- public |>
+  filter(grepl("US-", subnational1_code),
+         subnational1_code != "US-AK",
+         subnational1_code != "US-HI")
+
+
+# colors & fonts
+neg <- "#EB5353"
+pos <- "#36AE7C"
+bg <- "#009999"
+  
+font_add_google(name = "Roboto Slab", family = "roboto slab")
+showtext_auto()
+
+
+
+```
+
+```{r data for share of starlings}
+
+# Step 1: Get the total number of sightings of all species_codefor each location
+total_sightings <- public_us %>% group_by(loc_id) %>% summarize(total_sightings = sum(how_many))
+
+
+# Step 2: Get the number of sightings of XYZ for each location
+eursta_sightings <- public_us %>% filter(species_code== "eursta") %>% group_by(loc_id) %>% summarize(eursta_sightings = sum(how_many))
+
+
+# Step 3: merge the two dataframe you created above
+sightings_data <- total_sightings |> 
+  full_join(eursta_sightings, by = "loc_id") #|> 
+   #mutate(eursta_sightings = ifelse(is.na(eursta_sightings), 0, eursta_sightings)) # set NA to 0 so it can be calculated in the next step
+
+
+
+
+# Step 4: Create a new column in the dataframe to hold the proportion of 'XYZ' sightings
+sightings_data$eursta_share <- sightings_data$eursta_sightings / sightings_data$total_sightings
+
+# create df with loc_id latitude and longitude
+loc_data <- public_us |> 
+  select(loc_id, longitude, latitude) 
+
+unique_loc_data <- distinct(loc_data)
+
+sightings_data <- left_join(sightings_data, unique_loc_data, by = "loc_id") 
+
+
+# create categorical variable for Starling data
+
+sightings_data <- sightings_data |> 
+  mutate(eursta_share_category = ifelse(eursta_share > 0.2, 1, 0)) |> 
+  mutate(eursta_share_category = ifelse(eursta_share > 0.4, 2, 0)) |> 
+  mutate(eursta_share_category = ifelse(eursta_share > 0.6, 3, 0)) |> 
+  mutate(eursta_share_category = ifelse(eursta_share > 0.9, 4, 0)) 
+
+    
+ 
+
+```
+
+
+
+```{r map}
+
+# create a map of the US
+states_map <- map_data("state")
+
+map <- ggplot() + 
+  geom_map(data = states_map, map = states_map,
+           aes(x = long, y = lat, map_id = region),
+           fill = "white", color = "black") +
+  geom_point(data = sightings_data,
+             aes(x = longitude, y = latitude, color = eursta_share),
+             alpha =1, size = 0.1, 
+             na.rm = T) +
+  scale_color_gradient(low = "lightpink1", high = "blue") +
+   labs(title = "Ocurrence of European Starling",
+       subtitle = "As share of total bird population") +
+  theme_void() + 
+  theme(panel.background = element_rect(fill = bg, colour = bg),
+        plot.background = element_rect(fill = bg, colour = bg),
+        plot.title = element_text(family = "roboto slab", colour = "white",
+                                  size = 20, hjust = 0.5,
+                                  margin = margin(t = 35)),
+        plot.subtitle = element_text(family = "roboto slab", colour = "white",
+                                     size = 10, hjust = 0.5))
+
+
+
+map
+```
+
+```{r map 2}
+
+map <- ggplot() + 
+  geom_map(data = states_map, map = states_map,
+           aes(x = long, y = lat, map_id = region),
+           fill = "white", color = "black") +
+  geom_point(data = sightings_data,
+             aes(x = longitude, y = latitude, color = eursta_sightings),
+             alpha =0.5, size = 0.5) +
+  scale_color_gradient(low = "#ffcccc", high = "blue") +
+   labs(title = "Ocurrence of European Starling",
+       subtitle = "As count per location") +
+  theme_void() + 
+  theme(panel.background = element_rect(fill = bg, colour = bg),
+        plot.background = element_rect(fill = bg, colour = bg),
+        plot.title = element_text(family = "roboto slab", colour = "white",
+                                  size = 20, hjust = 0.5,
+                                  margin = margin(t = 35)),
+        plot.subtitle = element_text(family = "roboto slab", colour = "white",
+                                     size = 10, hjust = 0.5))
+
+
+
+map
+
+```
+```{r map cat}
+
+# combine loc_id: this combines all locations that have the same longitude and latidude before the comma, so there is less dots on the map, easier to read
+short_sightings_data <- sightings_data |> 
+  mutate(longitude = round(longitude, 0)) |> 
+  mutate(latitude = round(latitude, 0)) |> 
+  mutate(loc_id = paste(longitude, latitude, sep = "-")) |> 
+  group_by(loc_id) |> 
+  summarize(total_sightings = sum(total_sightings, na.rm = TRUE),
+            eursta_sightings = sum(eursta_sightings, na.rm = TRUE),
+            eursta_share = mean(eursta_share, na.rm = TRUE),
+            longitude = mean(longitude),
+            latitude= mean(latitude)) 
+  
+short_sightings_data <- subset(short_sightings_data, eursta_sightings !=0)
+  
+ 
+
+map_cat <- ggplot() + 
+  geom_map(data = states_map, map = states_map,
+           aes(x = long, y = lat, map_id = region),
+           fill = "white", color = "black") +
+  geom_point(data = short_sightings_data,
+             aes(x = longitude, y = latitude, color = eursta_sightings),
+             alpha =1, size = 2, 
+             na.rm = T) +
+  scale_color_gradientn(colors = c("wheat", "skyblue2", "seagreen1", "seagreen4" ),
+                        values = c(0, 0.05, 0.1, 0.3, 1),
+                        guide = "colorbar",
+                        name = "") +
+   labs(title = "Ocurrence of European Starling",
+       subtitle = "It's (almost) everywhere!") +
+  theme_void() + 
+  theme(panel.background = element_rect(fill = bg, colour = bg),
+        plot.background = element_rect(fill = bg, colour = bg),
+        plot.title = element_text(family = "roboto slab", colour = "white",
+                                  size = 20, hjust = 0.5,
+                                  margin = margin(t = 35)),
+        plot.subtitle = element_text(family = "roboto slab", colour = "white",
+                                     size = 10, hjust = 0.5))
+
+
+map_cat
+
+```
+
+
+## Second Plot: most common species
+
+```{r data}
+
+species_data <- public_us %>%
+  group_by(species_code) %>%
+  summarize(total_sightings = sum(how_many))
+
+species_data_top10 <- species_data %>%
+  top_n(10, total_sightings) |> 
+  arrange(desc(total_sightings)) |> 
+  mutate(name = ifelse, species_code = "", )
+
+
+```
+
+```{r plot viz}
+
+
+ggplot(species_data_top10, aes(x = total_sightings, y = species_code)) +
+  geom_bar(stat = "identity", fill = "#ffcccc", width = 0.5) +
+  theme_classic() +
+     labs(title = "Top 10 Bird Species",
+       subtitle = "As documented") +
+  theme(panel.background = element_rect(fill = bg, colour = bg),
+        plot.background = element_rect(fill = bg, colour = bg),
+        plot.title = element_text(family = "roboto slab", colour = "white",
+                                  size = 50, hjust = 0.5,
+                                  margin = margin(t = 35)),
+        plot.subtitle = element_text(family = "roboto slab", colour = "white",
+                                     size = 30, hjust = 0.5))
+
+```
+```{r}
+plot1 <- ggplot(species_data_top10, aes(x = total_sightings, y = reorder(species_code, total_sightings))) +
+  geom_bar(stat = "identity", fill = "#ffcccc", width = 0.5) +
+  theme_classic() +
+  labs(title = "Top 10 Bird Species",
+       subtitle = "As per number of sightings") +
+  labs(x = "", y = "") +
+  theme(axis.text.x = element_text(color = "white"),
+        axis.text.y = element_text(color = "white"),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank(),
+        axis.ticks = element_blank())  +
+  theme(panel.background = element_rect(fill = bg, colour = bg),
+        plot.background = element_rect(fill = bg, colour = bg),
+        plot.title = element_text(family = "roboto slab", colour = "white",
+                                  size = 30, hjust = 0.5,
+                                  margin = margin(t = 35)),
+        plot.subtitle = element_text(family = "roboto slab", colour = "white",
+                                     size = 20, hjust = 0.5)) 
+plot1
+```
+
+
+## Part 3 : Patchwork
+
+```{r}
+p <- map + (plot1) +
+  plot_layout(widths = c(3, 2), heights = c(2, 1)) +
+  plot_annotation(
+    title = "Birds in the US",
+    subtitle = "",
+    caption = "Felix Lanver | Data : Project FeederWatch",
+    theme = theme(plot.background = element_rect(fill = bg , colour = bg),
+                  plot.title = element_text(family = "roboto slab", colour = "white", size = 30,
+                                            margin = margin(t = 10), hjust = 0.5),
+                  plot.subtitle = element_text(family = "roboto slab", colour = "white", size = 15,
+                                               margin = margin(t = 5, b = 10), hjust = 0.5),
+                  plot.caption = element_text(family = "roboto slab", colour = "white", size = 5,
+                                              margin = margin(t = 5, b = 10), hjust = 0.5)))
+p
+```
+
+

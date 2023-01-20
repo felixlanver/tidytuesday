@@ -1,0 +1,305 @@
+---
+title: "Week"
+author: "Felix Lanver"
+date: "2023-01-13"
+output: html_document
+---
+
+# Set Up and Data
+
+```{r setup}
+
+#packages
+pacman::p_load(tidyverse, ggfx, patchwork, showtext, mapproj, broom)
+
+
+# Get the Data
+feederwatch <- tidytuesdayR::tt_load(2023, week = 2)
+# get public & countsite data
+public <- feederwatch$PFW_2021_public
+countsite <- feederwatch$PFW_count_countsite_public_2021
+
+# remove Canada, Alaska & Hawaii the simplify map
+public_us <- public |>
+  filter(grepl("US-", subnational1_code),
+         subnational1_code != "US-AK",
+         subnational1_code != "US-HI")
+
+# Import fonts (not sure why, maybe change this later to be a bit more idnividual)
+
+font_add_google(name = "Roboto Slab", family = "roboto slab")
+showtext_auto()
+
+# colors
+neg <- "#EB5353"
+pos <- "#36AE7C"
+bg <- "#009999"
+
+
+```
+
+
+```{r data}
+
+
+
+```
+
+
+
+```{r data wrangling}
+# prepare data for state division
+
+states.names <- tibble(
+  code = state.abb,
+  name = state.name
+)
+```
+
+
+
+```{r}
+# filter data to only include red-tailed hawk (by state)
+rethaw <- public_us %>% 
+  filter(species_code == "rethaw", valid == 1) %>% 
+  separate(subnational1_code, into = c("country", "state"), sep = "-") %>% 
+  filter(!country %in% c("XX", "CA")) %>% 
+  left_join(states.names, by = c("state" = "code")) %>% 
+  mutate(name = case_when(state == "DC" ~ "District of Columbia",
+                          TRUE ~ name)) %>% 
+  mutate(name = tolower(name)) %>% 
+  select(us_state = name, Year, Month, Day, how_many) %>% 
+  arrange(Year, Month, Day)
+
+# 
+count_per_state <- rethaw %>% 
+  group_by(us_state) %>% 
+  summarise(total = sum(how_many))
+
+map_data <- map_data("state") %>% 
+  left_join(count_per_state, by = c("region" = "us_state"))
+
+# df for sightings per month
+plot1_data <- rethaw %>% 
+  group_by(Year, Month) %>% 
+  summarise(total = sum(how_many)) %>% 
+  rowid_to_column()
+
+# df for sightings per day
+plot2_data <- rethaw %>% 
+  mutate(date = lubridate::as_date(paste(Year, Month, Day, sep = "-"))) %>% 
+  mutate(weekday = lubridate::wday(date, abbr = FALSE, label = TRUE, week_start = 7, locale = "en")) %>% 
+  group_by(weekday) %>% 
+  summarise(total = sum(how_many)) %>% 
+  mutate(weekday = fct_rev(fct_inorder(weekday)))
+
+rm(count_per_state, feederwatch, states.names)
+```
+
+
+
+```{r map}
+
+map <- ggplot(data = map_data,
+         aes(x = long, y = lat, group = group, fill = total)) +
+  geom_polygon(col = "grey70",
+               show.legend = FALSE) +
+  coord_map(projection = "albers", lat0 = 39, lat1 = 45) +
+  scale_fill_gradient2(low = "#ffcccc",
+                       mid = "#ff9999",
+                       high = "#ff6666",
+                       midpoint = max(map_data$total, na.rm = TRUE) / 2,
+                       na.value = "#cccccc") +
+  labs(title = "Frequency of the Species",
+       subtitle = "Darker colours indicate more birds") +
+  theme_void() +
+  theme(panel.background = element_rect(fill = "#009999", colour = "#009999"),
+        plot.background = element_rect(fill = "#009999", colour = "#009999"),
+        plot.title = element_text(family = "roboto slab", colour = "white",
+                                  size = 50, hjust = 0.5,
+                                  margin = margin(t = 35)),
+        plot.subtitle = element_text(family = "roboto slab", colour = "white",
+                                     size = 30, hjust = 0.5))
+
+map
+```
+
+```{r plot 1 habitats}
+habitat <- countsite %>%
+  select(loc_id, "hab_dcid_woods":"hab_marsh") %>%
+  drop_na() %>%
+  distinct()
+
+model_data <- public_us %>%
+  clean_names() %>% 
+  filter(valid == 1) %>%
+  left_join(habitat, by = "loc_id") %>%
+  select(obs_id, how_many, loc_id, "hab_dcid_woods":"hab_marsh") %>%
+  group_by(obs_id) %>%
+  mutate(across("hab_dcid_woods":"hab_marsh", ~ max(.x))) %>% 
+  ungroup() %>%
+  distinct() %>% 
+  select(how_many, hab_dcid_woods:hab_marsh)
+
+model_summary <- lm(how_many ~ ., data = model_data) %>%
+  tidy() %>%
+  slice(-1) %>%
+  mutate(abs_estimate = abs(estimate),
+         is_positive = (estimate > 0),
+         term = str_sub(term, 5),
+         term = str_replace(term, "_", " "))
+  
+# plot ---- 
+
+showtext_auto()
+font_add_google("Cormorant")
+main_font <- "Cormorant"
+
+# define x0
+x0 <- max(model_summary$abs_estimate)
+
+title <- "Which habitats attract the most birds?"
+subtitle <- "Mean effect of habitat type on number of observed birds in descending order"
+
+
+p <- model_summary %>%
+  ggplot() + 
+  ggtitle(title,
+         subtitle) +
+  geom_linerange(aes(y = reorder(term, estimate), 
+                     xmin = 0, xmax = estimate,
+                     colour = !is_positive),
+                     linewidth = 40) +
+  scale_color_manual(values = c(pos, neg)) +
+  geom_text(
+    mapping = aes(x = 0, y = term, label = term),
+    hjust = 0.5,
+    nudge_y = 0.4,
+    size = 4,
+    family = main_font) +
+  annotate("text", x = 1.25, y = 7,
+           label = "#TidyTuesday 10/01/2023 | Data: feederwatch.org | @_jcken",
+           family = main_font, angle = 90, color = "grey60") +
+  xlab("Number of birds we expect to see above overall mean") +
+  ylab("") +
+  xlim(-x0, x0) +
+  scale_y_discrete(breaks = NULL) +
+  theme_minimal() +
+  theme(legend.position = "n",
+        plot.title = element_text(hjust = 0.5,
+                                  family = main_font,
+                                  size = 20),
+        plot.subtitle = element_text(hjust = 1,
+                                     family = main_font,
+                                     size = 14),
+        text = element_text(family = main_font),
+        panel.grid = element_blank(),
+        plot.background = element_rect(fill = bg),
+        panel.background = element_rect(fill = bg, colour = bg),
+        axis.text.x = element_text(size = 16)) 
+
+p
+```
+
+
+# Plot 1 ----
+
+plot1 <- 
+  ggplot() +
+  geom_rect(aes(xmin = 1, xmax = 2, ymin = -4500, ymax = -2500),
+            col = "#ccf9ff", fill = "#251a5c", linewidth = 0.5) +
+  geom_text(aes(x = 1.5, y = -3500, label = "2020"),
+            col = "#ccf9ff", family = "roboto slab", size = 9) +
+  geom_rect(aes(xmin = 2, xmax = 6, ymin = -4500, ymax = -2500),
+            col = "#ccf9ff", fill = "#251a5c", linewidth  = 0.5) +
+  geom_text(aes(x = 4, y = -3500, label = "2021"),
+            col = "#ccf9ff", family = "roboto slab", size = 10) +
+  geom_text(aes(x = 1, y = -1500, label = "Nov"),
+            col = "#ccf9ff", family = "roboto slab", size = 10) +
+  geom_text(aes(x = 2, y = -1500, label = "Dec"),
+            col = "#ccf9ff", family = "roboto slab", size = 10) +
+  geom_text(aes(x = 3, y = -1500, label = "Jan"),
+            col = "#ccf9ff", family = "roboto slab", size = 10) +
+  geom_text(aes(x = 4, y = -1500, label = "Feb"),
+            col = "#ccf9ff", family = "roboto slab", size = 10) +
+  geom_text(aes(x = 5, y = -1500, label = "Mar"),
+            col = "#ccf9ff", family = "roboto slab", size = 10) +
+  geom_text(aes(x = 6, y = -1500, label = "Apr"),
+            col = "#ccf9ff", family = "roboto slab", size = 10) +
+  geom_segment(data = plot1_data,
+               aes(x = rowid, xend = rowid, y = 500, yend = total),
+               linetype = "dotted", col = "white") +
+  with_outer_glow(
+    geom_line(data = plot1_data,
+              aes(x = rowid, y = total),
+              col = "#ccf9ff", linewidth = 1.5),
+    colour = "#55d0ff",
+    sigma = 10) +
+  with_outer_glow(
+    geom_point(data = plot1_data,
+               aes(x = rowid, y = total),
+               shape = 21, col = "#ccf9ff", fill = "#251a5c", size = 10, stroke = 1),
+    colour = "#55d0ff",
+    sigma = 10) +
+  geom_text(data = plot1_data,
+            aes(x = rowid, y = total, label = total),
+            col = "#ccf9ff", size = 10) +
+  xlim(c(0, 7)) +
+  ylim(c(-4750, 9000)) +
+  labs(title = "Number of sightings per month") +
+  theme_void() +
+  theme(panel.background = element_rect(fill = "#251a5c", colour = "#251a5c"),
+        plot.background = element_rect(fill = "#251a5c", colour = "#251a5c"),
+        plot.margin = margin(r = 25, b = 10, l = 10),
+        plot.title = element_text(family = "roboto slab", colour = "white",
+                                  size = 50, hjust = 0.5,
+                                  margin = margin(t = 5, b = -20)))
+
+# Plot 2 ----
+
+plot2 <- 
+  ggplot() +
+  with_outer_glow(
+    geom_segment(data = plot2_data,
+                 aes(y = weekday, yend = weekday, x = 0, xend = total),
+                 col = "#ccf9ff", linewidth = 1),
+    colour = "#55d0ff", 
+    sigma = 10) +
+  geom_text(data = plot2_data,
+            aes(x = total + 1250, y = weekday, label = total),
+            colour = "#ccf9ff", size = 15) +
+  xlim(c(0, 15000)) +
+  labs(title = "Number of sightings per weekday",
+       x = "", y = "") +
+  theme(panel.background = element_rect(fill = "#251a5c", colour = "#251a5c"),
+        panel.grid = element_blank(),
+        plot.background = element_rect(fill = "#251a5c", colour = "#251a5c"),
+        plot.margin = margin(r = 25, b = 10, l = 10),
+        plot.title = element_text(family = "roboto slab", colour = "white",
+                                  size = 50, hjust = 0.5,
+                                  margin = margin(t = 15, b = 10)),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(family = "roboto slab", colour = "#ccf9ff",
+                                   size = 35),
+        axis.ticks = element_blank())
+
+# Create patchwork ----
+
+p <- map + (plot1 / plot2) +
+  plot_layout(widths = c(2, 1.5)) +
+  plot_annotation(
+    title = "Sightings of dark-eyed juncos in the U.S.",
+    subtitle = "between November 2020 & April 2021",
+    caption = "J.Kitt | Data : Project FeederWatch",
+    theme = theme(plot.background = element_rect(fill = "#251a5c", colour = "#251a5c"),
+                  plot.title = element_text(family = "roboto slab", colour = "white", size = 100,
+                                            margin = margin(t = 10), hjust = 0.5),
+                  plot.subtitle = element_text(family = "roboto slab", colour = "white", size = 50,
+                                               margin = margin(t = 5, b = 10), hjust = 0.5),
+                  plot.caption = element_text(family = "roboto slab", colour = "white", size = 30,
+                                              margin = margin(t = 5, b = 10), hjust = 0.5)))
+
+
+# Save plot ----
+
+ggsave("figs/2023_02_feederwatch.png", p, dpi = 320, width = 12, height = 6)
