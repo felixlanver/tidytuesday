@@ -12,14 +12,15 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 
 #packages
-pacman::p_load(tidyverse, ggfx, patchwork, showtext, mapproj, broom, rnaturalearth, tigris)
+pacman::p_load(tidyverse, ggfx, patchwork, showtext, mapproj, broom, rnaturalearth, tigris, janitor)
 
 
 # Get the Data
 feederwatch <- tidytuesdayR::tt_load(2023, week = 2)
 # get public & countsite data
 public <- feederwatch$PFW_2021_public
-countsite <- feederwatch$PFW_count_countsite_public_2021
+
+countsite <- feederwatch$PFW_count_site_data_public_2021
 
 # remove Canada, Alaska & Hawaii the simplify map
 public_us <- public |>
@@ -29,8 +30,8 @@ public_us <- public |>
 
 
 # colors & fonts
-neg <- "#EB5353"
-pos <- "#36AE7C"
+neg <- "lightpink1"
+pos <- "lightgrey"
 bg <- "#009999"
   
 font_add_google(name = "Roboto Slab", family = "roboto slab")
@@ -52,8 +53,7 @@ eursta_sightings <- public_us %>% filter(species_code== "eursta") %>% group_by(l
 
 # Step 3: merge the two dataframe you created above
 sightings_data <- total_sightings |> 
-  full_join(eursta_sightings, by = "loc_id") #|> 
-   #mutate(eursta_sightings = ifelse(is.na(eursta_sightings), 0, eursta_sightings)) # set NA to 0 so it can be calculated in the next step
+  full_join(eursta_sightings, by = "loc_id") 
 
 
 
@@ -61,9 +61,9 @@ sightings_data <- total_sightings |>
 # Step 4: Create a new column in the dataframe to hold the proportion of 'XYZ' sightings
 sightings_data$eursta_share <- sightings_data$eursta_sightings / sightings_data$total_sightings
 
-# create df with loc_id latitude and longitude
+# create df with loc_id latitude and longitude & obs_id
 loc_data <- public_us |> 
-  select(loc_id, longitude, latitude) 
+  select(loc_id, longitude, latitude, obs_id) 
 
 unique_loc_data <- distinct(loc_data)
 
@@ -117,7 +117,7 @@ map
 
 ```{r map 2}
 
-map <- ggplot() + 
+map2 <- ggplot() + 
   geom_map(data = states_map, map = states_map,
            aes(x = long, y = lat, map_id = region),
            fill = "white", color = "black") +
@@ -138,7 +138,7 @@ map <- ggplot() +
 
 
 
-map
+map2
 
 ```
 ```{r map cat}
@@ -198,29 +198,11 @@ species_data <- public_us %>%
 
 species_data_top10 <- species_data %>%
   top_n(10, total_sightings) |> 
-  arrange(desc(total_sightings)) |> 
-  mutate(name = ifelse, species_code = "", )
+  arrange(desc(total_sightings)) 
 
 
 ```
 
-```{r plot viz}
-
-
-ggplot(species_data_top10, aes(x = total_sightings, y = species_code)) +
-  geom_bar(stat = "identity", fill = "#ffcccc", width = 0.5) +
-  theme_classic() +
-     labs(title = "Top 10 Bird Species",
-       subtitle = "As documented") +
-  theme(panel.background = element_rect(fill = bg, colour = bg),
-        plot.background = element_rect(fill = bg, colour = bg),
-        plot.title = element_text(family = "roboto slab", colour = "white",
-                                  size = 50, hjust = 0.5,
-                                  margin = margin(t = 35)),
-        plot.subtitle = element_text(family = "roboto slab", colour = "white",
-                                     size = 30, hjust = 0.5))
-
-```
 ```{r}
 plot1 <- ggplot(species_data_top10, aes(x = total_sightings, y = reorder(species_code, total_sightings))) +
   geom_bar(stat = "identity", fill = "#ffcccc", width = 0.5) +
@@ -241,6 +223,115 @@ plot1 <- ggplot(species_data_top10, aes(x = total_sightings, y = reorder(species
         plot.subtitle = element_text(family = "roboto slab", colour = "white",
                                      size = 20, hjust = 0.5)) 
 plot1
+```
+
+
+## third plot: habitats
+
+```{r plot 3 habitats}
+habitat <- countsite %>%
+  select(loc_id, "hab_dcid_woods":"hab_marsh") %>%
+  drop_na() %>%
+  distinct()
+
+model_data <- sightings_data %>%
+  clean_names() %>% 
+  #filter(valid == 1) %>%
+  left_join(habitat, by = "loc_id") %>%
+  select(obs_id, eursta_sightings, loc_id, "hab_dcid_woods":"hab_marsh") %>%
+  group_by(obs_id) %>%
+  mutate(across("hab_dcid_woods":"hab_marsh", ~ max(.x))) %>% 
+  ungroup() %>%
+  distinct() %>% 
+  select(eursta_sightings, hab_dcid_woods:hab_marsh)
+
+model_summary <- lm(eursta_sightings ~ ., data = model_data) %>%
+  tidy() %>%
+  slice(-1) %>%
+  mutate(abs_estimate = abs(estimate),
+         is_positive = (estimate > 0),
+         term = str_sub(term, 5),
+         term = str_replace(term, "_", " "))
+  
+# plot ---- 
+
+showtext_auto()
+font_add_google("Cormorant")
+main_font <- "Cormorant"
+
+# define x0
+x0 <- max(model_summary$abs_estimate)
+
+title <- "Which habitats attract the most birds?"
+subtitle <- "Mean effect of habitat type on number of observed birds in descending order"
+
+
+p <- model_summary %>%
+  ggplot() + 
+  ggtitle(title,
+         subtitle) +
+  geom_linerange(aes(y = reorder(term, estimate), 
+                     xmin = 0, xmax = estimate,
+                     colour = !is_positive),
+                     linewidth = 1,
+                 size = 1.89) +
+ scale_color_manual(values = c(pos, neg)) +
+  geom_text(
+    mapping = aes(x = 0, y = term, label = term),
+    hjust = 0.5,
+    nudge_y = 0.4,
+    size = 4,
+    family = main_font) +
+  xlab("Number of birds we expect to see above overall mean") +
+  ylab("") +
+  xlim(-x0, x0) +
+  scale_y_discrete(breaks = NULL) +
+  theme_minimal() +
+  theme(legend.position = "n",
+        plot.title = element_text(hjust = 0.5,
+                                  family = "roboto slab",
+                                  size = 20),
+        plot.subtitle = element_text(hjust = 1,
+                                     family = "roboto slab",
+                                     size = 14),
+        text = element_text(family = "roboto slab"),
+        panel.grid = element_blank(),
+        plot.background = element_rect(fill = bg),
+        panel.background = element_rect(fill = bg, colour = bg),
+        axis.text.x = element_text(size = 16, color = "white"),
+        axis.text.y = element_text(color = "white"))
+        
+     
+
+p
+
+```
+
+
+```{r}
+plot1 <- ggplot(model_summary, aes(y = reorder(term, estimate),
+                                   xmin = 0, xmax = estimate,
+                                   colour = !is_positive),
+                linewidth = 20) +
+  scale_color_manual(values = c(pos, neg)) +
+  theme_classic() +
+  labs(title = "Top 10 Bird Species",
+       subtitle = "As per number of sightings") +
+  labs(x = "", y = "") +
+  theme(axis.text.x = element_text(color = "white"),
+        axis.text.y = element_text(color = "white"),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank(),
+        axis.ticks = element_blank())  +
+  theme(panel.background = element_rect(fill = bg, colour = bg),
+        plot.background = element_rect(fill = bg, colour = bg),
+        plot.title = element_text(family = "roboto slab", colour = "white",
+                                  size = 30, hjust = 0.5,
+                                  margin = margin(t = 35)),
+        plot.subtitle = element_text(family = "roboto slab", colour = "white",
+                                     size = 20, hjust = 0.5)) 
+plot1
+
 ```
 
 

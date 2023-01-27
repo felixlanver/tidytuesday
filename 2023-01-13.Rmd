@@ -17,7 +17,7 @@ pacman::p_load(tidyverse, ggfx, patchwork, showtext, mapproj, broom)
 feederwatch <- tidytuesdayR::tt_load(2023, week = 2)
 # get public & countsite data
 public <- feederwatch$PFW_2021_public
-countsite <- feederwatch$PFW_count_countsite_public_2021
+countsite <- feederwatch$PFW_count_site_data_public_2021
 
 # remove Canada, Alaska & Hawaii the simplify map
 public_us <- public |>
@@ -130,18 +130,18 @@ habitat <- countsite %>%
   drop_na() %>%
   distinct()
 
-model_data <- public_us %>%
+model_data <- sightings_data %>%
   clean_names() %>% 
-  filter(valid == 1) %>%
+  #filter(valid == 1) %>%
   left_join(habitat, by = "loc_id") %>%
-  select(obs_id, how_many, loc_id, "hab_dcid_woods":"hab_marsh") %>%
+  select(obs_id, eursta_sightings, loc_id, "hab_dcid_woods":"hab_marsh") %>%
   group_by(obs_id) %>%
   mutate(across("hab_dcid_woods":"hab_marsh", ~ max(.x))) %>% 
   ungroup() %>%
   distinct() %>% 
-  select(how_many, hab_dcid_woods:hab_marsh)
+  select(eursta_sightings, hab_dcid_woods:hab_marsh)
 
-model_summary <- lm(how_many ~ ., data = model_data) %>%
+model_summary <- lm(eursta_sightings ~ ., data = model_data) %>%
   tidy() %>%
   slice(-1) %>%
   mutate(abs_estimate = abs(estimate),
